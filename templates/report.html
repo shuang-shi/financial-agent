@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Financial Analysis Report</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #f5f5f5; color: #1a1a1a; }
+  .container { max-width: 960px; margin: 0 auto; padding: 40px 24px; }
+  .header { background: white; border-radius: 12px; padding: 32px;
+            border: 1px solid #e0e0e0; margin-bottom: 24px; }
+  .header h1 { font-size: 24px; font-weight: 600; margin-bottom: 4px; }
+  .header .meta { font-size: 13px; color: #888; margin-top: 4px; }
+  .badge { display: inline-block; background: #f0f0f0; border-radius: 4px;
+           padding: 2px 8px; font-size: 11px; color: #555;
+           margin-left: 8px; vertical-align: middle; }
+  .ai-note { background: #f0f7ff; border-left: 3px solid #378add;
+              padding: 10px 14px; font-size: 13px; color: #333;
+              border-radius: 0 6px 6px 0; margin-top: 12px; }
+  .metrics-grid { display: grid; grid-template-columns: repeat(3, 1fr);
+                  gap: 16px; margin-bottom: 24px; }
+  .metric-card { background: white; border-radius: 10px; padding: 20px;
+                 border: 1px solid #e0e0e0; }
+  .metric-card .label { font-size: 12px; color: #888; margin-bottom: 6px; }
+  .metric-card .value { font-size: 24px; font-weight: 600; }
+  .section { background: white; border-radius: 12px; padding: 32px;
+             border: 1px solid #e0e0e0; margin-bottom: 24px; }
+  .section h2 { font-size: 16px; font-weight: 600; margin-bottom: 20px;
+                border-left: 3px solid #1a1a1a; padding-left: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #1a1a1a; color: white; padding: 10px 12px;
+       text-align: left; font-weight: 500; }
+  td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; }
+  tr:hover td { background: #fafafa; }
+  .good { color: #2d6a4f; font-weight: 500; }
+  .warn { color: #b5630a; font-weight: 500; }
+  .bad  { color: #a32d2d; font-weight: 500; }
+  .analysis { line-height: 1.8; font-size: 14px; }
+  .analysis h2 { font-size: 15px; font-weight: 600; margin: 24px 0 8px;
+                 border-left: 3px solid #1a1a1a; padding-left: 12px; }
+  .analysis h3 { font-size: 14px; font-weight: 600; margin: 16px 0 6px; color: #333; }
+  .analysis p { margin-bottom: 10px; }
+  .analysis hr { border: none; border-top: 1px solid #eee; margin: 16px 0; }
+  .back { display: inline-block; margin-bottom: 20px; font-size: 13px;
+          color: #555; text-decoration: none; }
+  .back:hover { color: #1a1a1a; }
+  .footer { text-align: center; font-size: 12px; color: #aaa;
+            padding: 24px 0; }
+</style>
+</head>
+<body>
+<div class="container">
+  <a href="/" class="back">← Analyze another company</a>
+
+  <div class="header">
+    <div id="company-header"></div>
+  </div>
+
+  <div class="metrics-grid" id="metrics-grid"></div>
+
+  <div class="section">
+    <h2>Segment Underwriting Ratios</h2>
+    <table id="segments-table">
+      <thead>
+        <tr>
+          <th>Segment</th>
+          <th>Year</th>
+          <th>Net Premiums Earned</th>
+          <th>Loss Ratio</th>
+          <th>Expense Ratio</th>
+          <th>Combined Ratio</th>
+        </tr>
+      </thead>
+      <tbody id="segments-body"></tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Analyst Commentary</h2>
+    <div class="analysis" id="analysis"></div>
+  </div>
+
+  <div class="footer">
+    AI Financial Analysis Agent · Source: SEC EDGAR · For internal use only
+  </div>
+</div>
+
+<script>
+const data = JSON.parse(localStorage.getItem('report') || '{}');
+if (!data.company_name) window.location.href = '/';
+
+// Header
+document.getElementById('company-header').innerHTML = `
+  <h1>${data.company_name} <span class="badge">AI Generated</span></h1>
+  <div class="meta">10-K Filing · Filed ${data.filing_date} · Generated ${data.generated_date}</div>
+  <div class="ai-note">This report was generated automatically by an AI agent that ingested the 10-K filing directly from SEC EDGAR, extracted and verified key metrics, and produced structured commentary using Claude.</div>
+`;
+
+// Metrics
+const m = data.metrics || {};
+const metricCards = [
+  { label: "Total Revenue", value: m.revenue ? `$${m.revenue.toLocaleString()}M` : "N/A" },
+  { label: "Net Income", value: m.net_income ? `$${m.net_income.toLocaleString()}M` : "N/A" },
+  { label: "Total Assets", value: m.total_assets ? `$${m.total_assets.toLocaleString()}M` : "N/A" },
+  { label: "Total Equity", value: m.total_equity ? `$${m.total_equity.toLocaleString()}M` : "N/A" },
+  { label: "EPS (Basic)", value: m.eps ? `$${m.eps}` : "N/A" },
+  { label: "Loss Ratio", value: m.loss_ratio ? `${m.loss_ratio}%` : "N/A" },
+];
+document.getElementById('metrics-grid').innerHTML = metricCards.map(c => `
+  <div class="metric-card">
+    <div class="label">${c.label}</div>
+    <div class="value">${c.value}</div>
+  </div>
+`).join('');
+
+// Segments
+function crClass(cr) {
+  if (!cr) return '';
+  if (cr < 90) return 'good';
+  if (cr < 95) return 'warn';
+  return 'bad';
+}
+
+const segments = (data.segments || {}).segments || [];
+const segDict = {};
+segments.forEach(s => {
+  if (!segDict[s.name]) segDict[s.name] = [];
+  segDict[s.name].push(s);
+});
+
+let rows = '';
+if (segments.length === 0) {
+  rows = `<tr><td colspan="6" style="text-align:center;color:#888;padding:24px;font-size:13px;">
+    Segment underwriting ratio data not available for this company.
+    This is common for life insurers which report segment profitability
+    differently from P&C insurers.
+  </td></tr>`;
+} else {
+  Object.entries(segDict).forEach(([name, years]) => {
+    years.sort((a, b) => a.year - b.year).forEach((y, i) => {
+      const cr = y.combined_ratio;
+      rows += `<tr>
+        ${i === 0 ? `<td rowspan="${years.length}" style="font-weight:500;vertical-align:middle">${name}</td>` : ''}
+        <td>${y.year}</td>
+        <td>${y.net_premiums_earned ? '$' + y.net_premiums_earned.toLocaleString() + 'M' : 'N/A'}</td>
+        <td>${y.loss_ratio ? y.loss_ratio + '%' : 'N/A'}</td>
+        <td>${y.expense_ratio ? y.expense_ratio + '%' : 'N/A'}</td>
+        <td class="${crClass(cr)}">${cr ? cr + '%' : 'N/A'}</td>
+      </tr>`;
+    });
+  });
+}
+document.getElementById('segments-body').innerHTML = rows;
+// Analysis
+function mdToHtml(text) {
+  return text
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^---$/gm, '<hr>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/^(?!<[h|hr])/gm, '')
+    .split('\n').map(l => l.trim() ? (l.startsWith('<') ? l : `<p>${l}</p>`) : '').join('\n');
+}
+document.getElementById('analysis').innerHTML = mdToHtml(data.analysis || '');
+</script>
+</body>
+</html>
