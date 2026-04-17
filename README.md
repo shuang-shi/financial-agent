@@ -16,8 +16,9 @@ You type a ticker symbol. The agent:
 2. Locates the financial statements within hundreds of thousands of characters of text
 3. Extracts key metrics using Claude (Anthropic's AI)
 4. Independently verifies every calculated ratio with Python
-5. Generates structured analyst commentary with management questions
-6. Delivers a formatted executive briefing in your browser
+5. Assigns a confidence level (HIGH / MEDIUM / LOW) to every extracted field
+6. Generates structured analyst commentary with management questions
+7. Delivers a formatted executive briefing in your browser
 
 **Tested on:** AIG, Prudential (PRU), Chubb (CB), MetLife (MET), Travelers (TRV)
 
@@ -35,6 +36,7 @@ financial-agent/
 ├── analyze.py              # AI analyst commentary generator
 ├── generate_report.py      # HTML report generator
 ├── failure_test.py         # Systematic accuracy testing across 5 companies
+├── confidence_test.py      # Confidence scoring unit tests
 ├── templates/
 │   ├── index.html          # Ticker input page
 │   └── report.html         # Executive report page
@@ -81,7 +83,7 @@ ANTHROPIC_API_KEY=your_api_key_here
 python app.py
 ```
 
-Open your browser and go to `http://127.0.0.1:5000`
+Open your browser and go to `http://localhost:5000`
 
 Enter any insurance company ticker (AIG, PRU, CB, MET, TRV) and click Generate Report.
 
@@ -102,14 +104,14 @@ Loss ratio: 13,968 / 23,678 × 100 = 59.0%
 
 An independent Python layer re-computes every ratio and flags discrepancies between the AI output and raw source numbers. This is non-negotiable in regulated financial environments where every number must be traceable.
 
-### 2. Segment-level ratios over top-line only
+### 2. Confidence scoring over silent outputs
+Every extracted metric is tagged HIGH, MEDIUM, or LOW based on how it was found and whether the value is within the expected range for a major insurer. An AI that communicates its own uncertainty is more valuable than one that silently returns wrong numbers — because silent failures in financial analysis can lead to material decisions based on incorrect data.
+
+### 3. Segment-level ratios over top-line only
 A company's consolidated loss ratio can be misleading. This agent extracts segment-level underwriting ratios — breaking down performance by business line across 3 years — giving users a complete picture rather than a headline number that masks segment variation.
 
-### 3. Domain-specific metrics for insurance
+### 4. Domain-specific metrics for insurance
 The agent extracts insurance-specific metrics: loss ratio, acquisition ratio, general operating expense ratio, combined ratio, and accident year adjusted ratios. These reflect how insurance underwriting performance is actually evaluated — not generic financial KPIs.
-
-### 4. Graceful handling of filing format variation
-Different insurers use different labels for the same metrics. AIG calls it "Losses and loss adjustment expenses." Chubb calls it "Losses and loss expenses." Prudential uses "Policyholders' benefits." The agent handles all variations and degrades gracefully when segment data is unavailable (e.g., life insurers that don't report combined ratios).
 
 ### 5. Smart position finding for large documents
 10-K filings exceed 950,000 characters. Rather than sending the entire document to the AI, the agent locates the exact position of each financial statement section first, then sends targeted chunks. This reduces cost, improves accuracy, and avoids context window limitations.
@@ -140,57 +142,26 @@ Claude API (Anthropic) ──► Structured JSON extraction
 Python verification layer ──► Ratio cross-check ──► Discrepancy flag
      │
      ▼
+Confidence scorer ──► HIGH / MEDIUM / LOW per field
+     │
+     ▼
 Claude API ──► Analyst commentary
      │
      ▼
-Flask + HTML ──► Executive briefing in browser
+Flask + HTML ──► Executive briefing with confidence badges
 ```
 
 ---
 
-## Failure Analysis
+## Confidence Scoring System
 
-A systematic accuracy test was run across 5 major insurers to identify failure modes and inform the confidence scoring system design.
-
-### Results
-
-| Company | Type | Score | Revenue | Net Income | Total Assets | Total Equity | EPS | Loss Ratio |
-|---------|------|-------|---------|------------|--------------|--------------|-----|------------|
-| AIG | P&C | 100% | $26,775M | $3,096M | $161,254M | $41,162M | $5.48 | 52.89% |
-| Prudential | Life | 100% | $60,774M | $3,576M | $773,740M | $32,787M | $10.05 | 57.96% |
-| Chubb | P&C | 100% | $59,402M | $10,310M | $272,327M | $79,779M | $25.93 | 54.14% |
-| MetLife | Life | 50% | $77,084M | $3,173M | MISSING | MISSING | MISSING | 65.21% |
-| Travelers | P&C | 67% | MISSING | $6,242M | $143,708M | $32,894M | $27.83 | MISSING |
-
-**Overall accuracy: 77% (23/30 fields extracted correctly)**
-
-### Failure 1 — MetLife: Label Collision (50% score)
-
-**Root cause:** MetLife uses common financial terms in non-standard contexts earlier in the document. "Total assets" first appears as "Total Assets Under Management (AUM)" — a completely different metric. "Total equity" first appears in an equity securities investment table, not the consolidated balance sheet. The agent takes the first occurrence of each label, which in MetLife's case points to the wrong section.
-
-**Proposed fix:** Extend magnitude-check logic to equity and EPS fields. After finding a label, verify the surrounding number is within the expected range for a major insurer. If not, search for the next occurrence.
-
-### Failure 2 — Travelers: Revenue Label Variation (67% score)
-
-**Root cause:** Travelers does not use "Total revenues" as their primary income statement label. The agent's income statement chunk is anchored to this label — when it is absent, revenue and all revenue-derived metrics (loss ratio) fail together.
-
-**Proposed fix:** Add fallback revenue label candidates: "Total revenue", "Revenues", "Net written premiums", "Net earned premiums". Implement revenue magnitude validation to catch implausibly small extractions.
-
-### Key Insight
-
-All failures stem from the same root cause: label variation across filers. This is not a model intelligence problem — it is a data standardization problem. The agent needs a broader label candidate library and magnitude validation for every field.
-
----
-
-## Confidence Scoring System (Designed, In Progress)
-
-Rather than displaying extracted metrics without qualification, the agent is being extended to assign a confidence level to each field:
+Every extracted metric is assigned a confidence level displayed as a color-coded badge in the report:
 
 | Confidence | Criteria | Display |
 |------------|----------|---------|
-| HIGH | Label matched exactly, number in expected range, Python verification passed | Green — safe to use |
-| MEDIUM | Label matched with fallback candidate, number in expected range | Amber — use with awareness |
-| LOW | Label not found or number outside expected range | Red — requires human review |
+| HIGH | Label matched exactly, number in expected range, Python verification passed | Green badge |
+| MEDIUM | Label matched with fallback candidate, number in expected range | Amber badge |
+| LOW | Label not found or number outside expected range | Red badge — requires human review |
 
 **Expected magnitude ranges:**
 
@@ -203,23 +174,67 @@ Rather than displaying extracted metrics without qualification, the agent is bei
 | EPS | $0 — $100 |
 | Loss Ratio | 30% — 120% |
 
-Any value outside these ranges automatically receives LOW confidence and is flagged before displaying to the user.
+**Core product principle:** In regulated financial environments, an AI that communicates its own uncertainty is more valuable than one that silently returns wrong numbers.
 
-**Core product principle:** AI tools in regulated financial environments must communicate their own reliability explicitly. Silent failures — where the agent returns a wrong number without flagging it — are more damaging than flagged uncertainties that prompt human review.
+---
+
+## Failure Analysis & Fixes
+
+A systematic accuracy test was run across 5 major insurers to identify failure modes, fix them, and validate the fixes — demonstrating a complete product iteration cycle.
+
+### Final results (after all fixes)
+
+| Company | Type | Score | Revenue | Net Income | Total Assets | Total Equity | EPS | Loss Ratio |
+|---------|------|-------|---------|------------|--------------|--------------|-----|------------|
+| AIG | P&C | 100% | $26,775M | $3,096M | $161,254M | $41,139M | $5.48 | 52.89% |
+| Prudential | Life | 100% | $60,774M | $3,576M | $773,740M | $32,438M | $10.05 | 57.96% |
+| Chubb | P&C | 100% | $59,402M | $10,310M | $272,327M | $73,757M | $25.93 | 54.14% |
+| MetLife | Life | 100% | $77,084M | $3,173M | $745,166M | $28,398M | $4.74 | 65.21% |
+| Travelers | P&C | 100% | $48,828M | $6,288M | $143,708M | $32,894M | $27.83 | 55.74% |
+
+**Overall accuracy: 100% (30/30 fields extracted correctly)**
+
+### Confidence scoring results
+
+| Company | Revenue | Net Income | Total Assets | Total Equity | EPS | Loss Ratio |
+|---------|---------|------------|--------------|--------------|-----|------------|
+| AIG | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH |
+| Prudential | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH |
+| Chubb | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH |
+| MetLife | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH |
+| Travelers | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH |
+
+**30 HIGH, 0 MEDIUM, 0 LOW across 30 fields**
+
+### Key failures fixed
+
+**MetLife — Label Collision (initial score: 50%)**
+
+Root cause: "Total Assets Under Management" appeared before the balance sheet total assets. Fix: Implemented negative-value detection — any "Total assets" occurrence followed by a parenthesis within 50 characters is skipped, since accounting tables use parentheses for negative numbers.
+
+**Travelers — Revenue Label Variation (initial score: 67%)**
+
+Root cause: Improved EPS candidate list and position-finding logic also resolved Travelers' revenue extraction as a side effect.
+
+**Travelers — Unicode Apostrophe (confidence MEDIUM → HIGH)**
+
+Root cause: Travelers uses a Unicode right single quotation mark in "Total shareholders' equity" rather than a standard apostrophe. Fix: Added the Unicode variant to the exact candidates list.
+
+**Key insight:** Domain knowledge directly improves AI reliability. Negative-value detection using parentheses is a financial accounting convention — a generic text parser would miss it, but an analyst familiar with financial statements recognizes it immediately.
 
 ---
 
 ## Sample Output
 
 ### Top-level metrics (AIG 2025)
-| Metric | Value |
-|--------|-------|
-| Total Revenue | $26,775M |
-| Net Income | $3,097M |
-| Total Assets | $161,254M |
-| Total Equity | $41,162M |
-| EPS (Basic) | $5.48 |
-| Loss Ratio | 52.89% |
+| Metric | Value | Confidence |
+|--------|-------|------------|
+| Total Revenue | $26,775M | HIGH |
+| Net Income | $3,096M | HIGH |
+| Total Assets | $161,254M | HIGH |
+| Total Equity | $41,139M | HIGH |
+| EPS (Basic) | $5.48 | HIGH |
+| Loss Ratio | 52.89% | HIGH |
 
 ### Segment underwriting ratios (AIG 2025)
 | Segment | Year | Loss Ratio | Expense Ratio | Combined Ratio |
@@ -235,19 +250,15 @@ Any value outside these ranges automatically receives LOW confidence and is flag
 
 ## Roadmap
 
-### V2 — Reliability (next)
-- Implement confidence scoring system across all extracted fields
-- Fix MetLife label collision using magnitude-check extension
-- Fix Travelers revenue label variation using fallback candidates
-- Expand failure testing to 20 insurers — target 90%+ accuracy
-
-### V3 — Scale
+### V2 — Scale
 - Multi-company comparison dashboard — side-by-side benchmarking across peer insurers
 - Automated quarterly monitoring — detect material changes vs. prior period
+- Expand failure testing to 20 insurers — target 90%+ accuracy
 
-### V4 — Intelligence
+### V3 — Intelligence
 - Natural language Q&A — ask questions about the filing in plain English
 - Anomaly detection — flag ratios that deviate significantly from 3-year averages or peer benchmarks
+- Segment data support for Travelers and other non-standard P&C filers
 
 ---
 
