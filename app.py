@@ -12,6 +12,27 @@ load_dotenv()
 app = Flask(__name__)
 client = anthropic.Anthropic()
 
+EXPECTED_RANGES = {
+    "revenue":      (1000, 500000),
+    "net_income":   (-10000, 50000),
+    "total_assets": (10000, 2000000),
+    "total_equity": (1000, 200000),
+    "eps":          (0, 100),
+    "loss_ratio":   (30, 120),
+}
+
+def score_confidence(field, value, label_match):
+    if value is None or label_match == "not_found":
+        return "LOW"
+    min_val, max_val = EXPECTED_RANGES.get(field, (0, float('inf')))
+    in_range = min_val <= abs(value) <= max_val
+    if label_match == "exact" and in_range:
+        return "HIGH"
+    elif label_match == "fallback" and in_range:
+        return "MEDIUM"
+    else:
+        return "LOW"
+
 def get_cik(ticker):
     headers = {"User-Agent": "Shuang Shi shuangshi@sandiego.edu"}
     ticker_url = f"https://www.sec.gov/cgi-bin/browse-edgar?company=&CIK={ticker}&type=10-K&dateb=&owner=include&count=10&search_text=&action=getcompany&output=atom"
@@ -87,8 +108,6 @@ def find_position(text, marker):
     return text.lower().find(marker.lower())
 
 def find_consolidated_total_assets(text):
-    """Skip occurrences where the value is negative (parentheses) or
-    where no large number appears within 50 chars of the label."""
     marker = "Total assets"
     start = 0
     while True:
@@ -124,36 +143,46 @@ def call_claude(prompt, max_tokens=2048):
     return raw
 
 def extract_metrics(text):
+    # Income statement — exact label
     pos = find_position(text, "Total revenues")
-    chunk = text[max(0, pos-1000):pos+13000]
+    label_match_revenue = "exact" if pos != -1 else "not_found"
+    chunk = text[max(0, pos-1000):pos+13000] if pos != -1 else ""
 
-    eps_candidates = [
-        "Basic\n$",
-        "Basic earnings per share attributable",
-        "Basic earnings per common share",
-        "Basic:\nIncome from continuing",
-        "Income from continuing operations",
-        "Net income per share",
-    ]
+    # EPS — track which label matched
+    eps_exact = ["Basic\n$", "Basic earnings per share attributable"]
+    eps_fallback = ["Basic earnings per common share", "Basic:\nIncome from continuing",
+                    "Income from continuing operations", "Net income per share"]
     eps_pos = -1
-    for marker in eps_candidates:
+    label_match_eps = "not_found"
+    for marker in eps_exact:
         eps_pos = find_position(text, marker)
         if eps_pos != -1:
+            label_match_eps = "exact"
             break
+    if eps_pos == -1:
+        for marker in eps_fallback:
+            eps_pos = find_position(text, marker)
+            if eps_pos != -1:
+                label_match_eps = "fallback"
+                break
     eps_chunk = text[max(0, eps_pos-500):eps_pos+2000] if eps_pos != -1 else ""
 
-    loss_candidates = [
-        "Losses and loss adjustment expenses",
-        "Losses and loss expenses",
-        "Policyholders' benefits",
-        "Benefits and expenses",
-        "Policyholder benefits",
-    ]
+    # Loss metrics
+    loss_exact = ["Losses and loss adjustment expenses", "Losses and loss expenses"]
+    loss_fallback = ["Policyholders' benefits", "Benefits and expenses", "Policyholder benefits"]
     loss_pos = -1
-    for marker in loss_candidates:
+    label_match_loss = "not_found"
+    for marker in loss_exact:
         loss_pos = find_position(text, marker)
         if loss_pos != -1:
+            label_match_loss = "exact"
             break
+    if loss_pos == -1:
+        for marker in loss_fallback:
+            loss_pos = find_position(text, marker)
+            if loss_pos != -1:
+                label_match_loss = "fallback"
+                break
     loss_chunk = text[max(0, loss_pos-500):loss_pos+3000] if loss_pos != -1 else ""
 
     prompt = f"""You are a financial analyst reviewing a 10-K filing from an insurance company.
@@ -180,37 +209,55 @@ Loss metrics excerpt:
 {loss_chunk}"""
     raw = call_claude(prompt)
     try:
-        return json.loads(raw)
+        metrics = json.loads(raw)
     except:
-        return {}
+        metrics = {}
+
+    # Attach confidence scores
+    metrics["_confidence"] = {
+        "revenue":      score_confidence("revenue", metrics.get("revenue"), label_match_revenue),
+        "net_income":   score_confidence("net_income", metrics.get("net_income"), label_match_revenue),
+        "eps":          score_confidence("eps", metrics.get("eps"), label_match_eps),
+        "loss_ratio":   score_confidence("loss_ratio", metrics.get("loss_ratio"), label_match_loss),
+    }
+    return metrics
 
 def extract_balance_sheet(text):
+    # Total assets
     pos = find_consolidated_total_assets(text)
+    label_match_assets = "exact" if pos != -1 else "not_found"
 
-    equity_candidates = [
-        "Total equity\n",
-        "shareholders' equity\n$",
-        "Total Prudential Financial, Inc. equity",
-        "Total stockholders equity",
-        "Total AIG shareholders equity",
-        "Total equity\n$",
-        "Total equity",
-    ]
+    # Equity
+    equity_exact = ["Total equity\n", "Total shareholders\u2019 equity\n", "Total shareholders' equity\n", "shareholders' equity\n$"]
+    equity_fallback = ["Total Prudential Financial, Inc. equity", "Total stockholders equity",
+                       "Total AIG shareholders equity", "Total equity\n$", "Total equity"]
     eq_pos = -1
-    for marker in equity_candidates:
+    label_match_equity = "not_found"
+    for marker in equity_exact:
         eq_pos = text.lower().find(marker.lower())
         if eq_pos != -1:
             preview = text[eq_pos:eq_pos+150].strip()
             numbers = re.findall(r'[\d,]+', preview)
             for n in numbers:
                 cleaned = n.replace(",", "")
-                if cleaned.isdigit() and len(cleaned) >= 4:
-                    if int(cleaned) > 1000:
+                if cleaned.isdigit() and len(cleaned) >= 4 and int(cleaned) > 1000:
+                    label_match_equity = "exact"
+                    break
+            if label_match_equity == "exact":
+                break
+    if eq_pos == -1 or label_match_equity == "not_found":
+        for marker in equity_fallback:
+            eq_pos = text.lower().find(marker.lower())
+            if eq_pos != -1:
+                preview = text[eq_pos:eq_pos+150].strip()
+                numbers = re.findall(r'[\d,]+', preview)
+                for n in numbers:
+                    cleaned = n.replace(",", "")
+                    if cleaned.isdigit() and len(cleaned) >= 4 and int(cleaned) > 1000:
+                        label_match_equity = "fallback"
                         break
-            else:
-                eq_pos = -1
-                continue
-            break
+                if label_match_equity == "fallback":
+                    break
 
     chunk = text[max(0, pos-500):pos+3000] if pos != -1 else ""
     eq_chunk = text[max(0, eq_pos-500):eq_pos+2000] if eq_pos != -1 else ""
@@ -228,16 +275,20 @@ Equity excerpt:
 {eq_chunk}"""
     raw = call_claude(prompt)
     try:
-        return json.loads(raw)
+        result = json.loads(raw)
     except:
-        return {}
+        result = {}
+
+    result["_confidence"] = {
+        "total_assets": score_confidence("total_assets", result.get("total_assets"), label_match_assets),
+        "total_equity": score_confidence("total_equity", result.get("total_equity"), label_match_equity),
+    }
+    return result
 
 def extract_segments(text):
     combined_candidates = [
-        "P&C combined ratio",
-        "P&C Combined Ratio",
-        "combined ratio",
-        "Combined ratio",
+        "P&C combined ratio", "P&C Combined Ratio",
+        "combined ratio", "Combined ratio",
     ]
     pos = -1
     for marker in combined_candidates:
@@ -255,12 +306,9 @@ def extract_segments(text):
             return {"segments": []}
 
     npm_candidates = [
-        "Net premiums earned\n5",
-        "Net premiums earned\n4",
-        "Net premiums earned\n3",
-        "Net premiums earned\n2",
-        "Net premiums earned\n$",
-        "Net premiums earned",
+        "Net premiums earned\n5", "Net premiums earned\n4",
+        "Net premiums earned\n3", "Net premiums earned\n2",
+        "Net premiums earned\n$", "Net premiums earned",
     ]
     npm_pos = -1
     for marker in npm_candidates:
@@ -271,17 +319,18 @@ def extract_segments(text):
             if digits > 3:
                 break
 
-    start = min(pos, npm_pos) if npm_pos != -1 else pos
+    start = npm_pos if npm_pos != -1 else pos
     chunk = text[start:start+18000]
+
     prompt = f"""You are a financial analyst reviewing a 10-K filing.
 Extract segment underwriting ratios for all available years.
 Look carefully for tables showing loss ratio, expense ratio, and combined ratio
 broken down by segment with columns for multiple years (2025, 2024, 2023).
 Also extract net premiums earned per segment per year where available.
 For the consolidated P&C segment, net premiums earned appears at the very start
-of this excerpt as a standalone line showing three years of data
-(e.g. Net premiums earned 53014 49846 45712). Use these numbers for the
-consolidated P&C row net_premiums_earned field.
+of this excerpt as a standalone line showing three years of data.
+Use these numbers for the consolidated P&C row net_premiums_earned field.
+
 Return ONLY a JSON object:
 {{
   "segments": [
@@ -386,11 +435,20 @@ def analyze():
         for k in ["total_assets", "total_equity"]:
             if not metrics.get(k):
                 metrics[k] = balance.get(k)
+        # Merge confidence scores
+        if "_confidence" not in metrics:
+            metrics["_confidence"] = {}
+        metrics["_confidence"].update(balance.get("_confidence", {}))
         segments = extract_segments(text)
         if metrics.get("losses_and_lae") and metrics.get("revenue"):
             metrics["loss_ratio_verified"] = round(
                 metrics["losses_and_lae"] / metrics["revenue"] * 100, 2
             )
+            # Upgrade loss ratio confidence if Python verification passes
+            reported = metrics.get("loss_ratio")
+            if reported and abs(metrics["loss_ratio_verified"] - reported) < 0.1:
+                if metrics["_confidence"].get("loss_ratio") != "LOW":
+                    metrics["_confidence"]["loss_ratio"] = "HIGH"
         analysis = generate_analysis(metrics, segments)
         return jsonify({
             "company_name": company_name,

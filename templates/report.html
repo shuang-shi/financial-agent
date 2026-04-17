@@ -22,8 +22,17 @@
                   gap: 16px; margin-bottom: 24px; }
   .metric-card { background: white; border-radius: 10px; padding: 20px;
                  border: 1px solid #e0e0e0; }
-  .metric-card .label { font-size: 12px; color: #888; margin-bottom: 6px; }
-  .metric-card .value { font-size: 24px; font-weight: 600; }
+  .metric-card .label { font-size: 12px; color: #888; margin-bottom: 4px; }
+  .metric-card .value { font-size: 24px; font-weight: 600; margin-bottom: 6px; }
+  .badge-high { display:inline-block; font-size:10px; font-weight:500;
+                padding:2px 6px; border-radius:4px;
+                background:#EAF3DE; color:#27500A; }
+  .badge-medium { display:inline-block; font-size:10px; font-weight:500;
+                  padding:2px 6px; border-radius:4px;
+                  background:#FAEEDA; color:#633806; }
+  .badge-low { display:inline-block; font-size:10px; font-weight:500;
+               padding:2px 6px; border-radius:4px;
+               background:#FCEBEB; color:#791F1F; }
   .section { background: white; border-radius: 12px; padding: 32px;
              border: 1px solid #e0e0e0; margin-bottom: 24px; }
   .section h2 { font-size: 16px; font-weight: 600; margin-bottom: 20px;
@@ -99,21 +108,27 @@ document.getElementById('company-header').innerHTML = `
 
 // Metrics
 const m = data.metrics || {};
+const conf = m._confidence || {};
+function badge(level) {
+  if (!level) return '';
+  const cls = level === 'HIGH' ? 'badge-high' : level === 'MEDIUM' ? 'badge-medium' : 'badge-low';
+  return `<span class="${cls}">${level}</span>`;
+}
 const metricCards = [
-  { label: "Total Revenue", value: m.revenue ? `$${m.revenue.toLocaleString()}M` : "N/A" },
-  { label: "Net Income", value: m.net_income ? `$${m.net_income.toLocaleString()}M` : "N/A" },
-  { label: "Total Assets", value: m.total_assets ? `$${m.total_assets.toLocaleString()}M` : "N/A" },
-  { label: "Total Equity", value: m.total_equity ? `$${m.total_equity.toLocaleString()}M` : "N/A" },
-  { label: "EPS (Basic)", value: m.eps ? `$${m.eps}` : "N/A" },
-  { label: "Loss Ratio", value: m.loss_ratio ? `${m.loss_ratio}%` : "N/A" },
+  { label: "Total Revenue", value: m.revenue ? `$${m.revenue.toLocaleString()}M` : "N/A", conf: conf.revenue },
+  { label: "Net Income", value: m.net_income ? `$${m.net_income.toLocaleString()}M` : "N/A", conf: conf.net_income },
+  { label: "Total Assets", value: m.total_assets ? `$${m.total_assets.toLocaleString()}M` : "N/A", conf: conf.total_assets },
+  { label: "Total Equity", value: m.total_equity ? `$${m.total_equity.toLocaleString()}M` : "N/A", conf: conf.total_equity },
+  { label: "EPS (Basic)", value: m.eps ? `$${m.eps}` : "N/A", conf: conf.eps },
+  { label: "Loss Ratio", value: m.loss_ratio ? `${m.loss_ratio}%` : "N/A", conf: conf.loss_ratio },
 ];
 document.getElementById('metrics-grid').innerHTML = metricCards.map(c => `
   <div class="metric-card">
     <div class="label">${c.label}</div>
     <div class="value">${c.value}</div>
+    ${badge(c.conf)}
   </div>
 `).join('');
-
 // Segments
 function crClass(cr) {
   if (!cr) return '';
