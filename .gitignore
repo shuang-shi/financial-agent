@@ -13,3 +13,5 @@ aig_index.html
 *.json
 *.txt
 aig_report.html
+debug_*.py
+test_*.py
