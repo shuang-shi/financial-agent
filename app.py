@@ -87,25 +87,25 @@ def find_position(text, marker):
     return text.lower().find(marker.lower())
 
 def find_consolidated_total_assets(text):
-    """Find the position of consolidated total assets
-    by looking for large numbers (100,000+) near Total assets label."""
+    """Skip occurrences where the value is negative (parentheses) or
+    where no large number appears within 50 chars of the label."""
     marker = "Total assets"
     start = 0
     while True:
         idx = text.lower().find(marker.lower(), start)
         if idx == -1:
             break
-        # Extract next 100 chars and look for large numbers
-        snippet = text[idx:idx+100]
+        snippet = text[idx:idx+50]
+        if "(" in snippet:
+            start = idx + 1
+            continue
         numbers = re.findall(r'[\d,]+', snippet)
         for n in numbers:
-            try:
-                val = int(n.replace(",", ""))
-                # Consolidated total assets for major insurers > 50,000M
+            cleaned = n.replace(",", "")
+            if cleaned.isdigit() and len(cleaned) >= 6:
+                val = int(cleaned)
                 if val > 50000:
                     return idx
-            except:
-                pass
         start = idx + 1
     return -1
 
@@ -128,8 +128,9 @@ def extract_metrics(text):
     chunk = text[max(0, pos-1000):pos+13000]
 
     eps_candidates = [
+        "Basic\n$",
         "Basic earnings per share attributable",
-        "Basic earnings per share",
+        "Basic earnings per common share",
         "Basic:\nIncome from continuing",
         "Income from continuing operations",
         "Net income per share",
@@ -164,7 +165,7 @@ Extract these metrics and return ONLY a JSON object:
 - eps (earnings per share basic, most recent year)
 - losses_and_lae (losses and loss adjustment expenses OR policyholders benefits in millions, most recent year)
 - loss_ratio (losses_and_lae / revenue x 100, rounded to 2 decimals)
-- loss_ratio_calculation (e.g. "13968 / 23678 x 100 = 59.0%")
+- loss_ratio_calculation (show the formula)
 
 Note: This may be a life insurer (policyholders benefits) or P&C insurer (losses and LAE).
 Use null if not found.
@@ -184,10 +185,10 @@ Loss metrics excerpt:
         return {}
 
 def extract_balance_sheet(text):
-    # Use smart consolidated total assets finder
     pos = find_consolidated_total_assets(text)
 
     equity_candidates = [
+        "Total equity\n",
         "shareholders' equity\n$",
         "Total Prudential Financial, Inc. equity",
         "Total stockholders equity",
@@ -199,10 +200,17 @@ def extract_balance_sheet(text):
     for marker in equity_candidates:
         eq_pos = text.lower().find(marker.lower())
         if eq_pos != -1:
-            preview = text[eq_pos:eq_pos+100].strip()
-            digits = sum(c.isdigit() for c in preview[:50])
-            if digits > 3:
-                break
+            preview = text[eq_pos:eq_pos+150].strip()
+            numbers = re.findall(r'[\d,]+', preview)
+            for n in numbers:
+                cleaned = n.replace(",", "")
+                if cleaned.isdigit() and len(cleaned) >= 4:
+                    if int(cleaned) > 1000:
+                        break
+            else:
+                eq_pos = -1
+                continue
+            break
 
     chunk = text[max(0, pos-500):pos+3000] if pos != -1 else ""
     eq_chunk = text[max(0, eq_pos-500):eq_pos+2000] if eq_pos != -1 else ""
